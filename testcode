@@ -1,0 +1,83 @@
+#include <stdio.h>
+#include <cuda.h>
+
+// CUDA kernel for sum reduction
+__global__ void sumReduction(int *input, int *output, int size) {
+    extern __shared__ int sharedData[];
+
+    // Thread ID
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Load elements into shared memory
+    if (i < size) {
+        sharedData[tid] = input[i];
+    } else {
+        sharedData[tid] = 0;
+    }
+    __syncthreads();
+
+    // Perform parallel reduction in shared memory
+    for (unsigned int s = 1; s < blockDim.x; s *= 2) {
+        if (tid % (2 * s) == 0) {
+            sharedData[tid] += sharedData[tid + s];
+        }
+        __syncthreads();
+    }
+
+    // Write result of this block to the output array
+    if (tid == 0) {
+        output[blockIdx.x] = sharedData[0];
+    }
+}
+
+int main() {
+    const int size = 1024; // Size of the array
+    const int bytes = size * sizeof(int);
+
+    // Allocate host memory
+    int *h_array = (int*) malloc(bytes);
+    int *h_output = (int*) malloc(bytes);
+
+    // Initialize the array with some values
+    for (int i = 0; i < size; i++) {
+        h_array[i] = 1; // You can change these values
+    }
+
+    // Allocate device memory
+    int *d_array, *d_output;
+    cudaMalloc((void**) &d_array, bytes);
+    cudaMalloc((void**) &d_output, bytes);
+
+    // Copy data from host to device
+    cudaMemcpy(d_array, h_array, bytes, cudaMemcpyHostToDevice);
+
+    // Kernel launch parameters
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (size + threadsPerBlock - 1) / threadsPerBlock;
+
+    // Launch the kernel
+    sumReduction<<<blocksPerGrid, threadsPerBlock, threadsPerBlock * sizeof(int)>>>(d_array, d_output, size);
+
+    // Copy result from device to host
+    cudaMemcpy(h_output, d_output, blocksPerGrid * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Final sum on CPU (reduction of block results)
+    int totalSum = 0;
+    for (int i = 0; i < blocksPerGrid; i++) {
+        totalSum += h_output[i];
+    }
+
+    // Print the result
+    printf("Sum of array elements: %d\n", totalSum);
+
+    // Free device memory
+    cudaFree(d_array);
+    cudaFree(d_output);
+
+    // Free host memory
+    free(h_array);
+    free(h_output);
+
+    return 0;
+}
